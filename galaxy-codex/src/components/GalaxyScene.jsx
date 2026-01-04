@@ -5,20 +5,35 @@ import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPa
 import SpriteText from 'three-spritetext';
 import useStore from '../store/useStore';
 
+// Category color mapping - outside component to avoid recreation
+const getCategoryColor = (category) => {
+  switch (category) {
+    case 'Core AI': return '#00ffff';
+    case 'Applications': return '#00ff00';
+    case 'Theory': return '#aa00ff';
+    case 'Tools': return '#ffaa00';
+    default: return '#aaddff';
+  }
+};
+
 const GalaxyScene = () => {
   const fgRef = useRef();
-  const { graphData, expandNode, setActiveNode } = useStore();
+  const { graphData, galaxies, setActiveNode, updateGalaxyCentroid } = useStore();
   const coreRef = useRef(null); // Ref for the Sentient Core animation
+  const galaxyLabelsRef = useRef({}); // Track galaxy label sprites
 
-  // 1. Add Starfield, Lights, and Post-Processing
+  // 1. Add Starfield, Lights, and Post-Processing + Initial Camera
   useEffect(() => {
     if (fgRef.current) {
-      // Configure Forces
-      fgRef.current.d3Force('charge').strength(-80); // Low repulsion to prevent explosion
-      fgRef.current.d3Force('link').distance(40).strength(2); // Strong, short links
-      // fgRef.current.d3Force('center', null); // Keep default center to pull things back
+      // Configure Forces - strong links to prevent flying apart
+      fgRef.current.d3Force('charge').strength(-30); // Low repulsion
+      fgRef.current.d3Force('link').distance(35).strength(1.5); // Strong links keep nodes tethered
+      fgRef.current.d3Force('center').strength(0.05); // Pull toward center
 
       const scene = fgRef.current.scene();
+
+      // Set initial camera position - offset to the right so core appears left of HUD
+      fgRef.current.cameraPosition({ x: 150, y: 30, z: 200 }, { x: 0, y: 0, z: 0 }, 0);
 
       // Create stars
       const starGeometry = new THREE.BufferGeometry();
@@ -55,16 +70,56 @@ const GalaxyScene = () => {
     }
   }, []);
 
-  // 2. Animation Loop (Sentient Core Pulse only)
+  // 2. Create/Update Galaxy Labels
+  useEffect(() => {
+    if (!fgRef.current) return;
+    const scene = fgRef.current.scene();
+    if (!scene) return;
+
+    // Create or update galaxy label sprites
+    Object.entries(galaxies).forEach(([galaxyName, galaxyData]) => {
+      if (galaxyData.nodes.size < 2) return; // Don't show label for single-node galaxies
+
+      const { centroid } = galaxyData;
+      let label = galaxyLabelsRef.current[galaxyName];
+
+      if (!label) {
+        // Create new galaxy label
+        label = new SpriteText(galaxyName);
+        label.color = '#ffffff';
+        label.textHeight = 8; // Larger than node labels
+        label.backgroundColor = 'rgba(0, 0, 0, 0.6)';
+        label.padding = 2;
+        label.borderRadius = 4;
+        label.fontFace = 'Orbitron, Inter, sans-serif';
+        label.fontWeight = 'bold';
+        label.name = `galaxy_${galaxyName}`;
+        label.userData = { isGalaxyLabel: true };
+        scene.add(label);
+        galaxyLabelsRef.current[galaxyName] = label;
+      }
+
+      // Update position to centroid (raised above nodes)
+      label.position.set(centroid.x, centroid.y + 30, centroid.z);
+    });
+
+    // Remove labels for galaxies that no longer exist
+    Object.keys(galaxyLabelsRef.current).forEach(name => {
+      if (!galaxies[name]) {
+        scene.remove(galaxyLabelsRef.current[name]);
+        delete galaxyLabelsRef.current[name];
+      }
+    });
+  }, [galaxies]);
+
+  // 3. Animation Loop (Sentient Core Pulse + LOD)
   useEffect(() => {
     let frameId;
     const animate = (time) => {
       // Sentient Core Animation
       if (coreRef.current) {
-        // Rotate whole system
         coreRef.current.rotation.y += 0.002;
 
-        // Pulse the "Core Cloud"
         const coreCloud = coreRef.current.children.find(c => c.name === 'coreCloud');
         if (coreCloud) {
           const positions = coreCloud.geometry.attributes.position.array;
@@ -72,7 +127,6 @@ const GalaxyScene = () => {
 
           for (let i = 0; i < positions.length; i += 3) {
             const v = new THREE.Vector3(originals[i], originals[i + 1], originals[i + 2]);
-            // Pulse math: Sine waves based on position + time
             const pulse = Math.sin(time * 0.002 + v.x * 0.05) + Math.cos(time * 0.003 + v.y * 0.05);
             const scale = 1 + (pulse * 0.3);
 
@@ -83,7 +137,6 @@ const GalaxyScene = () => {
           coreCloud.geometry.attributes.position.needsUpdate = true;
         }
 
-        // Rotate Outer Shell
         const shell = coreRef.current.children.find(c => c.name === 'outerShell');
         if (shell) {
           shell.rotation.z -= 0.001;
@@ -91,29 +144,40 @@ const GalaxyScene = () => {
         }
       }
 
-      // LOD & Animation Loop
+      // LOD: Galaxy labels vs Node labels based on camera distance
       if (fgRef.current) {
         const camera = fgRef.current.camera();
         const scene = fgRef.current.scene();
 
         if (camera && scene) {
+          const cameraDistFromOrigin = camera.position.length();
+          const isZoomedOut = cameraDistFromOrigin > 300;
+
           scene.traverse((obj) => {
-            // Check if it's a SpriteText (has .text property)
-            if (obj.isSprite && obj.text) {
+            if (!obj.isSprite) return;
+
+            // Galaxy labels - show when zoomed out
+            if (obj.userData?.isGalaxyLabel) {
+              obj.visible = isZoomedOut;
+              obj.material.opacity = isZoomedOut ? Math.min(1, (cameraDistFromOrigin - 300) / 200) : 0;
+              return;
+            }
+
+            // Node labels - show when zoomed in
+            if (obj.text && !obj.userData?.isGalaxyLabel) {
               const dist = camera.position.distanceTo(obj.position);
 
-              // LOD Logic
-              if (dist > 600) {
-                obj.visible = false; // Hide completely when very far
+              if (isZoomedOut) {
+                // When zoomed out, hide all node labels
+                obj.visible = false;
+              } else if (dist > 250) {
+                obj.visible = false;
+              } else if (dist < 80) {
+                obj.visible = true;
+                obj.material.opacity = 1;
               } else {
                 obj.visible = true;
-                // Scale text based on distance to maintain readability
-                // But clamp it so it doesn't get ridiculously huge or tiny
-                const scale = Math.max(4, Math.min(20, dist / 15));
-                obj.scale.set(scale, scale, 1); // Uniform scaling to fix squished text
-
-                // Fade out when getting far
-                obj.material.opacity = Math.max(0, 1 - (dist / 600));
+                obj.material.opacity = Math.max(0.2, 1 - ((dist - 80) / 170));
               }
             }
           });
@@ -126,17 +190,6 @@ const GalaxyScene = () => {
     animate(0);
     return () => cancelAnimationFrame(frameId);
   }, []);
-
-  // Category Colors
-  const getCategoryColor = (category) => {
-    switch (category) {
-      case 'Core AI': return '#00ffff';
-      case 'Applications': return '#00ff00';
-      case 'Theory': return '#aa00ff';
-      case 'Tools': return '#ffaa00';
-      default: return '#aaddff';
-    }
-  };
 
   const handleClick = useCallback(async (node) => {
     if (!fgRef.current) return;
@@ -178,7 +231,7 @@ const GalaxyScene = () => {
   // Custom Node Object
   const nodeThreeObject = useCallback((node) => {
     const group = new THREE.Group();
-    const color = new THREE.Color(getCategoryColor(node.category) || node.color || '#00ffff');
+    const color = new THREE.Color(node.color || getCategoryColor(node.galaxy) || '#00ffff');
     const radius = node.val ? node.val / 5 : 4;
     const circleTexture = createCircleTexture();
 
@@ -337,19 +390,35 @@ const GalaxyScene = () => {
     const core = new THREE.Mesh(coreGeo, coreMat);
     group.add(core);
 
-    // 4. Text Label
+    // 4. Text Label - readable size, positioned above node
     const sprite = new SpriteText(node.name);
-    sprite.color = '#00ffff';
-    sprite.textHeight = 2;
-    sprite.position.set(0, radius + 4, 0);
-    sprite.fontFace = 'Orbitron, sans-serif';
+    sprite.color = '#ffffff';
+    sprite.textHeight = 4;
+    sprite.backgroundColor = 'rgba(0, 20, 40, 0.7)';
+    sprite.padding = 1;
+    sprite.borderRadius = 2;
+    sprite.position.set(0, radius + 6, 0);
+    sprite.fontFace = 'Inter, Arial, sans-serif';
+    sprite.fontWeight = 'bold';
     group.add(sprite);
 
     return group;
   }, [createCircleTexture]);
 
+  // Force graph to re-render when data changes
+  useEffect(() => {
+    if (fgRef.current && graphData.links.length > 0) {
+      setTimeout(() => {
+        if (fgRef.current) {
+          fgRef.current.graphData(graphData);
+        }
+      }, 100);
+    }
+  }, [graphData]);
+
   return (
     <div style={{ width: '100%', height: '100%', background: '#000' }}>
+      {/* Debug overlay - disabled for portfolio */}
       <ForceGraph3D
         ref={fgRef}
         graphData={graphData}
@@ -358,11 +427,10 @@ const GalaxyScene = () => {
         backgroundColor="#000000"
         showNavInfo={false}
 
-        // Physics - Stabilized
-        d3AlphaDecay={0.05} // Higher decay = faster settling
-        d3VelocityDecay={0.6} // High friction to stop explosion
-        cooldownTicks={100}
-        onEngineStop={() => fgRef.current.zoomToFit(400)} // Optional: fit to view when done
+        // Physics - smooth settling
+        d3AlphaDecay={0.02} // Gradual settling
+        d3VelocityDecay={0.3} // Low friction for smooth motion
+        cooldownTicks={150}
 
         // Link Styling
         linkColor={() => '#ffffff'}

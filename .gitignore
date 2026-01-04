@@ -1,3 +1,6 @@
 node_modules/
 .env
 cache.json
+# Ignore media files and gem3 folder
+*.mp4
+gem3/

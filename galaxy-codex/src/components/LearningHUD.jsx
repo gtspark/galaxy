@@ -190,28 +190,32 @@ const LearningHUD = () => {
             {activeTab === 'visuals' ? (
               <div className="visuals-container">
                 {/* 1. Nano Banana Image */}
-                {visualUrl && (
-                  <div className="visual-block">
-                    <h3>Nano Banana Visualization</h3>
+                <div className="visual-block">
+                  <h3>AI Visualization</h3>
+                  {loadingVisual ? (
+                    <div className="visual-loading">
+                      <div className="spinner"></div>
+                      <span>Generating visualization...</span>
+                    </div>
+                  ) : visualUrl ? (
                     <img
                       src={visualUrl}
                       alt={`Visualization of ${currentNode.name}`}
                       className="generated-image"
                     />
-                  </div>
-                )}
-
-                {/* 2. Mermaid Diagram */}
-                <div className="visual-block">
-                  <h3>Structural Diagram</h3>
-                  <div className="mermaid-wrapper" ref={mermaidRef}>
-                    {/* Mermaid renders here via useEffect */}
-                  </div>
+                  ) : (
+                    <p className="no-visuals">No visualization available</p>
+                  )}
                 </div>
 
-                {/* 3. Fallback */}
-                {!visualUrl && !currentNode.content?.includes('```mermaid') && (
-                  <p className="no-visuals">Generating visuals... (or none available)</p>
+                {/* 2. Mermaid Diagram */}
+                {currentNode.content?.includes('```mermaid') && (
+                  <div className="visual-block">
+                    <h3>Structural Diagram</h3>
+                    <div className="mermaid-wrapper" ref={mermaidRef}>
+                      {/* Mermaid renders here via useEffect */}
+                    </div>
+                  </div>
                 )}
               </div>
             ) : (

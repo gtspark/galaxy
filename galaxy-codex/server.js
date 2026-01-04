@@ -4,8 +4,13 @@ import dotenv from 'dotenv';
 import fs from 'fs/promises';
 import path from 'path';
 import { GoogleGenerativeAI } from '@google/generative-ai';
+import { createRequire } from 'module';
 
 dotenv.config();
+
+// Stranger detection & lockdown (CommonJS module)
+const require = createRequire(import.meta.url);
+const { notifyIfStranger, checkLockdown } = require('/home/admin/shared/notify.js');
 
 const app = express();
 const PORT = process.env.PORT || 3005;
@@ -36,8 +41,7 @@ loadCache();
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || 'YOUR_API_KEY');
 // Text Model
 const model = genAI.getGenerativeModel({ model: "gemini-3-pro-preview" }); // Using Gemini 3 Pro Preview
-// Image Model (Nano Banana)
-const imageModel = genAI.getGenerativeModel({ model: "imagen-3.0-generate-001" });
+// Image Model (Nano Banana) - configured per-request with responseModalities
 
 const SYSTEM_PROMPT_TEMPLATE = `
 You are the Galaxy Codex, an advanced AI interface for exploring human knowledge.
@@ -46,6 +50,11 @@ Your goal is to provide structured, educational content about any topic requeste
 Format your response in strictly structured Markdown:
 
 # {TOPIC_PLACEHOLDER}
+
+## Galaxy
+Assign this topic to ONE semantic galaxy (a broad knowledge cluster). Choose from existing galaxies or create a new one if needed.
+Format: **Galaxy: [Galaxy Name]**
+Examples: "Data & Learning", "Neural Architectures", "Mathematics & Theory", "Applications & Tools", "Ethics & Society", "Hardware & Infrastructure"
 
 ## Overview
 A concise, high-level summary of the topic (2-3 sentences).
@@ -65,6 +74,11 @@ Wrap it in a \`\`\`mermaid code block.
 ## Connections
 List 3-5 related topics for further exploration.
 
+## Bridge Galaxies
+If this topic connects to other knowledge domains, list them.
+Format: **Bridges: [Galaxy1], [Galaxy2]**
+Example: "Bridges: Mathematics & Theory, Hardware & Infrastructure"
+
 IMPORTANT:
 - Wrap 6-10 key related terms in [[double brackets]] like [[Neural Networks]]
 - Use markdown formatting
@@ -73,12 +87,15 @@ IMPORTANT:
 `;
 
 // Streaming endpoint using Server-Sent Events
-app.get('/galaxy-api/expand-stream', async (req, res) => {
+app.get('/galaxy-api/expand-stream', checkLockdown('galaxy'), async (req, res) => {
   const { topic } = req.query;
 
   if (!topic) {
     return res.status(400).json({ error: 'Topic is required' });
   }
+
+  // Alert if stranger is expanding a node
+  notifyIfStranger(req, `🌌 Galaxy Codex: Expanding node "${topic}"`);
 
   // Check cache first
   if (cache[topic] && cache[topic].content) {
@@ -115,10 +132,21 @@ app.get('/galaxy-api/expand-stream', async (req, res) => {
       res.write(`data: ${JSON.stringify({ type: 'chunk', text: chunkText })}\n\n`);
     }
 
-    // Build final data object (without image yet)
+    // Parse galaxy assignment from content
+    const galaxyMatch = fullText.match(/\*\*Galaxy:\s*([^*\n]+)\*\*/i);
+    const galaxy = galaxyMatch ? galaxyMatch[1].trim() : 'Core AI';
+
+    // Parse bridge galaxies
+    const bridgeMatch = fullText.match(/\*\*Bridges?:\s*([^*\n]+)\*\*/i);
+    const bridges = bridgeMatch
+      ? bridgeMatch[1].split(',').map(b => b.trim()).filter(Boolean)
+      : [];
+
+    // Build final data object
     const data = {
       name: topic,
-      category: 'Core AI',
+      galaxy: galaxy,
+      bridges: bridges,
       content: fullText
     };
 
@@ -149,19 +177,20 @@ app.get('/galaxy-api/visualize', async (req, res) => {
 
   try {
     console.log(`Generating Nano Banana visualization for: ${topic}`);
-    // Strict prompt for technical accuracy and portrait orientation
-    const prompt = `Technical diagram, flowchart, or schematic of ${topic}. 
-        Style: Blueprint, Neon Schematic, Network Graph, White lines on dark background. 
-        Format: Vertical Portrait Orientation, Tall Aspect Ratio (9:16).
-        High contrast, educational, informative, detailed.`;
+    const prompt = `Technical diagram or schematic of ${topic}.
+        Style: Neon blueprint, cyan/white lines on dark background.
+        High contrast, educational, detailed.
+        Square aspect ratio (1:1), 512x512 pixels.
+        Clean, minimal design suitable for a sci-fi HUD display.`;
 
-    // Attempt to use Imagen model
-    // Note: This requires an API key with access to Imagen
-    const imageModel = genAI.getGenerativeModel({ model: "imagen-3.0-generate-001" });
+    // Use Nano Banana (gemini-3-pro-image-preview) with proper config
+    const imageModel = genAI.getGenerativeModel({
+      model: "gemini-3-pro-image-preview",
+      generationConfig: {
+        responseModalities: ["IMAGE"],
+      }
+    });
 
-    // This is a speculative call structure for Imagen in the SDK. 
-    // If this fails, we catch the error and inform the user.
-    // We do NOT silently fallback to "AI slop".
     const result = await imageModel.generateContent(prompt);
     const response = await result.response;
 
@@ -191,7 +220,7 @@ app.get('/galaxy-api/visualize', async (req, res) => {
     res.status(500).json({
       error: 'Image Generation Failed',
       details: error.message,
-      hint: 'Ensure GEMINI_API_KEY has access to imagen-3.0-generate-001'
+      hint: 'Ensure GEMINI_API_KEY has access to gemini-3-pro-image-preview'
     });
   }
 });

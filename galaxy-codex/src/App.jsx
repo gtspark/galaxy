@@ -19,7 +19,7 @@ function App() {
         fontSize: '0.8rem',
         pointerEvents: 'none'
       }}>
-        Galaxy Codex v0.1
+        Galaxy Codex v3.0
       </div>
     </div>
   );
